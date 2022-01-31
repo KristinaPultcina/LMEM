@@ -140,14 +140,19 @@ plot_fb2<- ggplot(data = fb_2, aes(x = factor(trial_type,level = c("norisk","pre
 plot_fb2 
           
 ######Усредняем насквозь 3 ##### 
-fun_mean <- function(x){
-  return(data.frame(y=mean(x),label=mean(x,na.rm=T)))}
+#fun_mean <- function(x){
+  #return(data.frame(y=mean(x),label=mean(x,na.rm=T)))}
 
-p<- ggplot(data = means, aes(x = factor(trial_type,level = c("norisk","prerisk","risk","postrisk")), y = mean_beta))+geom_line()+ 
-  stat_summary(fun =mean, geom="point",colour="darkred", size=3) +
-  stat_summary(fun.data = fun_mean, geom="text", vjust=-0.7) 
-p
-p+ ylim(-2.5, -0.5)#тут лучше не приводить к общей шкале, тк реальный разброс выходит от -5 до 5
+fb_3<- means %>% 
+  group_by(trial_type) %>% 
+  summarize(mean_beta = mean(mean_beta),sd = sd(mean_beta), se = sd / sqrt(n())) #усредняем между фидбэками
+
+plot_fb3<- ggplot(data = fb_3, aes(x = factor(trial_type,level = c("norisk","prerisk","risk","postrisk")), y = mean_beta, label=mean_beta, group = 1))+geom_point() +
+  geom_line()+geom_text(hjust=0, vjust=0)+ ylim(-2.5, -0.5)+ labs(y = "Усреднение насквозь")+ ylim(-2.5, -0.5)
+
+plot_fb3
+
+
 
 ####### Маргинальные значения из emmeans(усреднение 4)
 emm_options(pbkrtest.limit = 5000)
