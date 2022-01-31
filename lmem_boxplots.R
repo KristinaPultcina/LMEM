@@ -130,7 +130,7 @@ fb_2<- means %>%
   group_by(trial_type, feedback_cur) %>% 
   summarize(mean_beta = mean(mean_beta),sd = sd(mean_beta), se = sd / sqrt(n()))# усредняем фидбэки внутри трайлов
 
-fb_2<- means %>% 
+fb_2<- fb_2 %>% 
   group_by(trial_type) %>% 
   summarize(mean_beta = mean(mean_beta),sd = sd(mean_beta), se = sd / sqrt(n())) #усредняем между фидбэками
 
