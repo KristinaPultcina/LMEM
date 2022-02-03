@@ -1,0 +1,205 @@
+library(reshape2)
+library(data.table)
+library(ggplot2)
+library(ggpubr)
+library(lme4)
+library(ggpubr)
+library(emmeans)
+library(lmerTest)
+library(plotrix)
+library(stringi)
+library(gridExtra)
+library(ggprism)
+library(dplyr)
+library(tibble)
+options(scipen = 999)
+
+sterr <- function(x) sd(x)/sqrt(length(x))
+
+path_p <- '/Users/kristina/Documents/stc/lmem_sensors' # path to files with p-vals
+path <- '/Users/kristina/Documents/stc/dataframe_for_LMEM/df_lmem'
+setwd('/Users/kristina/Documents/stc/lmem_sensors')
+out_path <- '/Users/kristina/Documents/stc/lmem_sensors' ## path to save tables and pictures
+
+## load subj_list ##
+subj_list <- fread('/Users/kristina/Documents/stc/subj_list.csv')
+
+
+df <- fread ('/Users/kristina/Documents/stc/LMEM_trial_cur_fb.csv')
+df$V1 <- NULL
+
+# fdr 
+df[, interaction_fdr:=p.adjust(`trial_type:feedback_cur`, method = 'fdr')]
+
+# choose sensors signigicant in both intervals
+#sensors_1 <- unique(df[interaction_fdr <=0.05 | interval== '[1.5 1.7]']$sensor_name)
+#sensors_2 <- unique(df[df$interaction_fdr <=0.05 | df$interval== '[1.7 1.9]']$sensor_name)
+
+#sensors_all <- intersect(sensors_1,sensors_2) 
+#post response : 0.700, 0.900
+sensors_all<- fread('/Users/kristina/Documents/stc/dataframe_for_LMEM/sensors/occipital _(posterior_cluster)fig6 .csv', header=TRUE)
+#MEG1912 = subset(sensors_all, sensor_name == "MEG1912")
+sensors_all$V6<- NULL
+
+####### make dataframe with files info ########
+
+sensor_info <- fread('/Users/kristina/Documents/stc/sensors.csv', header = TRUE)
+names(sensor_info)[1] <- 'sensor'
+
+files <- data.table(full_filename=list.files(path, pattern = '*.csv', full.names = T))
+files$short_filename <- list.files(path, pattern = '*.csv', full.names = F)
+
+# files$short_filename <- gsub('planar2','',files$short_filename)
+
+files[, sensor:=stri_extract_first_regex(short_filename,"[0-9]+")]
+# files[, interval:=str_extract(short_filename,'[0-9]+_[0-9]+.csv')]
+# files[,interval:=gsub('.csv','',interval)]
+files$sensor <- as.integer(files$sensor)
+files <- merge.data.table(files,sensor_info,by = c('sensor'))
+names(files)[4] <- 'sensor_name'
+files$effect <- NULL
+
+
+##### filter files and leave needed sensors only ######
+
+files <- files[sensor_name %in% sensors_all$sensor_name] 
+
+
+######## collect data and average #############
+
+temp <- fread(files[sensor==60]$full_filename) #donor of colnames for empty datatable "beta"
+temp$V1 <- NULL
+beta <- setNames(data.table(matrix(nrow = 0, ncol = length(colnames(temp))+2)), c(colnames(temp),'sensor','sensor_name'))
+
+for (i in files$sensor){
+  temp <- fread(files[sensor==i]$full_filename)
+  temp$V1 <- NULL
+  temp <- as.data.table(temp)
+  temp <- temp[subject %in% subj_list$subj_list]
+  
+  temp$sensor <- i
+  temp$sensor_name <- files[sensor==i]$sensor_name
+  
+  beta <- rbind(beta,temp)
+}
+
+beta[,`mean beta power [1.5 1.7]`:=rowMeans(beta[,.SD,.SDcol=c("beta power [1.5 1.7]","beta power [1.7 1.9]")])] # mean of intervals 
+
+
+beta[, index := 1:.N, by=c('subject','sensor')] #set indexes of all trials of each subject, same for all sensors 
+
+
+means <- beta[, mean(`mean beta power [1.5 1.7]`),by=c('subject','index')] # compute means of sensors
+
+
+cols <- c("subject","round","trial_type","feedback_cur","feedback_prev","scheme",'index')
+means<- merge.data.table(means,beta[sensor==60, ..cols], by = c('subject','index'), all.x = TRUE) # take trial classification from "beta", sensor is random you can take any
+
+means$subject <- as.factor(means$subject)
+means$round <- as.factor(means$round)
+means$feedback_cur <-as.factor(means$feedback_cur)
+means$feedback_prev <-as.factor(means$feedback_prev)
+means$scheme <-as.factor(means$scheme)
+means$trial_type <- as.factor(means$trial_type)
+
+setnames(means,'V1','mean_beta')
+
+
+f <- seq(from=-2.5, to=-0.5, by=0.1)
+interval <- 'mean_beta' #name of dependent variable
+###########СОЗДАЕМ МОДЕЛЬ#############
+emm_options(lmerTest.limit = 8368)
+m <- lmerTest::lmer(mean_beta ~ trial_type * feedback_cur+ (1|subject), data = means) # main part, fit model!
+m2 <- m # it is because we missed step, so final model=initial model
+
+#####Emmean for choice type
+emm_options(pbkrtest.limit = 8368)
+marginal_em <- emmeans(m, ~ as.factor(trial_type), level = 0.99)
+marginal_em<- as.data.frame(marginal_em)
+
+######Emmean for choice type&feedbacks
+
+marginal_feedback_choice <- emmeans(m, ~ trial_type|feedback_cur, level = 0.99)
+marginal_feedback_choice<- as.data.frame(marginal_feedback_choice)
+marginal_fc<- marginal_feedback_choice
+#########Тьюки для одного контраста#################
+Tuk<-data.table(summary(emmeans(m2, pairwise ~ trial_type, adjust = 'tukey',lmer.df = "satterthwaite"))$contrasts)
+Tuk <- Tuk[, group1:=gsub(' -.*', '', contrast)][, group2:=gsub('.*- ', '', contrast)]
+Tuk <- Tuk[p.value<0.1, p_significant:=format(p.value, digits = 3)]
+
+n <- Tuk[!is.na(p_significant), .N]
+thr <- max(means[, mean(mean_beta) + std.error(mean_beta), by=trial_type]$V1) #
+
+if (n>1){
+  Tuk <- Tuk[!is.na(p_significant), y.position := seq((thr+0.005), (thr+0.305), 0.3/(n-1))] #here you can choose other values
+} else {
+  Tuk <- Tuk[!is.na(p_significant), y.position := thr+0.02]
+}
+
+Tuk[p.value<0.001, stars:='***']
+Tuk[p.value<0.01 & p.value>0.001 , stars:='**']
+Tuk[p.value<0.05 & p.value>0.01 , stars:='*']
+#Tuk[p.value>0.05 & p.value<0.1 , stars:='#']
+
+
+##########Строим график для одного контраста########
+
+plot_emmean<-ggplot(data = marginal_em, aes(x = factor(trial_type,level = c("norisk","prerisk","risk","postrisk")), 
+                                            y = emmean,  ymin=emmean-SE, ymax = emmean+SE, group = 1))+
+  scale_x_discrete(labels = c('HP','Pre-LP','LP', 'post-LP'))+
+  geom_point() + geom_errorbar(width = 0.1, size=1)+geom_line(size=1)+labs(y = "Estimated marginal means (beta power)", x = "Choice type")+
+  theme_classic()+theme(text = element_text(size=20))+ ylim(-4.0, -1) +
+  stat_pvalue_manual(Tuk, label = 'stars', size = 6, tip.length = 0.001, y.position = "y.position", inherit.aes = FALSE)
+
+plot_emmean
+
+
+##########Строим график для парного контраста (Choice type&feedbacks)########
+
+Tuk2<-emmeans(m2, pairwise ~ feedback_cur|trial_type, adjust = 'tukey',lmer.df = "satterthwaite")
+Tuk2 <- summary(Tuk2)$contrasts
+Tuk2 <- data.table(Tuk2)
+
+Tuk2[p.value<0.001, stars:='***']
+Tuk2[p.value<0.01 & p.value>0.001 , stars:='**']
+Tuk2[p.value<0.05 & p.value>0.01 , stars:='*']
+#Tuk2[p.value>0.05 & p.value<0.1 , stars:='#']
+
+names(Tuk2[,1])<- "group_1"
+names(Tuk2[,2])<- "group_2"
+
+Tuk2 <- Tuk2[, group1:=gsub(' -.*', '', contrast)][, group2:=gsub('.*- ', '', contrast)]
+Tuk2 <- Tuk2[p.value<0.1, p_significant:=format(p.value, digits = 3)]
+
+signif <- Tuk2[!is.na(stars)]
+
+sequence <-data.table(trial_type=c("norisk","prerisk","risk", "postrisk"),number=c(1,2,3,4)) 
+
+y_values_rew <- filter(marginal_feedback_choice, feedback_cur %in% "positive")
+setnames(y_values_rew,"emmean",'y_values_rew')
+
+y_values_lose <-filter(marginal_feedback_choice, feedback_cur %in% "negative")
+setnames(y_values_lose, "y_values_rew",'y_values_lose')
+
+y_values <- merge(y_values_lose,y_values_rew,by='trial_type')
+y_values <- merge(y_values,sequence,by='trial_type')
+y_values[,y_max:=max(y_values_lose,y_values_rew),by=trial_type]
+y_values <- merge(y_values,signif,by='trial_type')
+
+setnames(marginal_feedback_choice, 'y_values_lose', "emmean")
+
+# plot
+
+p1 <- ggplot(marginal_feedback_choice, aes(x = factor(trial_type,level = c("norisk","prerisk","risk","postrisk")),
+              y = emmean,  ymin=emmean-SE, ymax = emmean+SE, color = feedback_cur,group = feedback_cur))+
+               scale_x_discrete(labels = c('HP','Pre-LP','LP', 'post-LP'))+ geom_line(size=1.5)+
+               geom_point(position=position_dodge(0.1)) + geom_errorbar(width = 0.1,  position=position_dodge(0.1), size=1.5)+labs(y = "Estimated marginal means(beta power)", x = "Choice type")+
+               theme_classic()+ theme(text = element_text(size=20))+scale_color_discrete(name = "Current feedback", labels = c("Loss", "Gain"))+
+  ylim(-4.8, -1.0) +  geom_signif(y_position=c(y_values$y_max +0.05),
+                                                                xmin=c(y_values$number-0.075), xmax=c(y_values$number+0.075),annotation=c(y_values$stars), 
+                                                                tip_length=0.001,textsize = 7,vjust = 0.4)
+
+p1
+
+
+
