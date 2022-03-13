@@ -1,0 +1,207 @@
+library(reshape2)
+library(data.table)
+library(ggplot2)
+library(ggpubr)
+library(lme4)
+library(ggpubr)
+library(emmeans)
+library(lmerTest)
+library(plotrix)
+library(stringi)
+
+library(dplyr)
+library(tibble)
+
+library(sjPlot)
+library(glmmTMB)
+
+options(scipen = 999)
+
+setwd("/Users/kristina/Documents/stc/dataframe_for_LMEM/rt")
+rt<- read.csv("/Users/kristina/Documents/stc/dataframe_for_LMEM/rt/events_classification_clean_final.csv", sep= ";")
+rt<- na.omit(rt)
+rt<-rt[!( rt$label.type=="Stimulus (right side)"|rt$label.type == "Button (left)"| rt$label.type == "Stimulus (left side)"|rt$label.type == "	
+Feedback LOSE INV"| rt$label.type == "Button (right)"| rt$label.type == "Feedback REW INV" | rt$label.type == "Feedback LOSE INV"|
+           rt$response.class == "risk and prerisk"| rt$response.class == "risk and postrisk"| rt$response.class == "postrisk and prerisk"| rt$response.class=="last" | rt$label.type == "Show Bank"|
+           rt$response.class=="risk, postrisk and prerisk"| rt$response.class=="first"),]
+
+
+
+my_df <- rt %>%
+  filter(response.time> 300 & response.time < 1500)
+my_df<- filter(my_df, subj %in% c("P001", "P002", "P004", "P006", "P007", "P008", "P011", "P014", "P015", "P016", "P017",
+                                  "P019", "P021","P022", "P023","P024", "P025", "P028", "P029", "P030", "P031", "P032",
+                                  "P033", "P034","P035","P039", "P040", "P042", "P043", "P044","P045", "P047", "P048", "P052",
+                                  "P053", "P055", "P057", "P059", "P060", "P062"))
+                                  
+                                  
+#Create dataset with trained trials###########
+
+trained_df<-my_df[!(my_df$learning.criteria == "learning"),]
+
+############ Correlation beta&RT ###########
+path_p <- '/Users/kristina/Documents/stc/lmem_sensors' # path to files with p-vals
+#path <- '/Users/kristina/Documents/stc//dataframe_for_LMEM/dataframe_for_LMEM_beta_16_30_trf_early_log'
+path <- "/Users/kristina/Documents/stc/dataframe_for_LMEM/rt/dataframe_for_LMEM_beta_16_30_trf_early_log_with_times_of_resp"
+#path<- '/Users/kristina/Documents/stc/dataframe_for_LMEM/not_trained/dataframe_for_LMEM_beta_16_30_trf_early_log_not_trained'
+setwd('/Users/kristina/Documents/stc/lmem_sensors')
+out_path <- '/Users/kristina/Documents/stc/lmem_sensors' ## path to save tables and pictures
+## load subj_list ##
+subj_list <- fread('/Users/kristina/Documents/stc/subj_list.csv')
+
+
+df <- fread ('/Users/kristina/Documents/stc/LMEM_trial_cur_fb.csv')
+df$V1 <- NULL
+
+# fdr 
+df[, interaction_fdr:=p.adjust(`trial_type:feedback_cur`, method = 'fdr')]
+
+# choose sensors signigicant in both intervals
+#sensors_all <- intersect(sensors_1,sensors_2) 
+#post response : 0.700, 0.900
+#sensors_all<- fread('/Users/kristina/Documents/stc/dataframe_for_LMEM/sensors/occipital_cluster_1.5_1.9.csv', header=TRUE)
+#sensors_all<- fread('/Users/kristina/Documents/stc/dataframe_for_LMEM/sensors/anterior_cluster(fig.6).csv', header=TRUE)
+#sensors_all<- fread('/Users/kristina/Documents/stc/dataframe_for_LMEM/sensors/1.100_1.500.csv', header=TRUE)
+#sensors_all<- fread('/Users/kristina/Documents/stc/dataframe_for_LMEM/sensors/cluster_feedback_anticipation(fig.4).csv', header=TRUE)
+sensors_all<- fread('/Users/kristina/Documents/stc/dataframe_for_LMEM/sensors/cluster_decision_making(Fig.3).csv', header=TRUE)
+#sensors_all<- fread('/Users/kristina/Documents/stc/dataframe_for_LMEM/sensors/0.1_0.5(before_feed).csv', header=TRUE)
+#sensors_all<- fread('/Users/kristina/Documents/stc/dataframe_for_LMEM/sensors/1500_1900_all.csv', header=TRUE)
+
+
+
+
+####### make dataframe with files info ########
+
+sensor_info <- fread('/Users/kristina/Documents/stc/sensors.csv', header = TRUE)
+names(sensor_info)[1] <- 'sensor'
+
+files <- data.table(full_filename=list.files(path, pattern = '*.csv', full.names = T))
+files$short_filename <- list.files(path, pattern = '*.csv', full.names = F)
+
+# files$short_filename <- gsub('planar2','',files$short_filename)
+
+files[, sensor:=stri_extract_first_regex(short_filename,"[0-9]+")]
+# files[, interval:=str_extract(short_filename,'[0-9]+_[0-9]+.csv')]
+# files[,interval:=gsub('.csv','',interval)]
+files$sensor <- as.integer(files$sensor)
+files <- merge.data.table(files,sensor_info,by = c('sensor'))
+names(files)[4] <- 'sensor_name'
+files$effect <- NULL
+
+
+##### filter files and leave needed sensors only ######
+
+files <- files[sensor_name %in% sensors_all$sensor_name] 
+
+
+######## collect data and average #############
+temp <- fread(files[sensor==5]$full_filename) #donor of colnames for empty datatable "beta"
+temp$V1 <- NULL
+beta <- setNames(data.table(matrix(nrow = 0, ncol = length(colnames(temp))+2)), c(colnames(temp),'sensor','sensor_name'))
+
+for (i in files$sensor){
+  temp <- fread(files[sensor==i]$full_filename)
+  temp$V1 <- NULL
+  temp <- as.data.table(temp)
+  temp <- temp[subject %in% subj_list$subj_list]
+  
+  temp$sensor <- i
+  temp$sensor_name <- files[sensor==i]$sensor_name
+  
+  beta <- rbind(beta,temp)
+}
+
+beta[,`mean beta power [-0.9 -0.7]`:=rowMeans(beta[,.SD,.SDcol=c("beta power [-0.9 -0.7]", "beta power [-0.7 -0.5]","beta power [-0.5 -0.3]", "beta power [-0.3 -0.1]" )])] # mean of intervals 
+
+
+beta[, index := 1:.N, by=c('subject','sensor')] #set indexes of all trials of each subject, same for all sensors 
+
+
+means <- beta[, mean(`mean beta power [-0.9 -0.7]`),by=c('subject','index')] # compute means of sensors
+
+
+cols <- c("subject","round","trial_type","trial_number","feedback_cur","feedback_prev","scheme",'index', "times_of_response")
+means<- merge.data.table(means,beta[sensor==5, ..cols], by = c('subject','index'), all.x = TRUE) # take trial classification from "beta", sensor is random you can take any
+
+means$subject <- as.factor(means$subject)
+means$round <- as.factor(means$round)
+means$feedback_cur <-as.factor(means$feedback_cur)
+means$feedback_prev <-as.factor(means$feedback_prev)
+means$scheme <-as.factor(means$scheme)
+means$trial_type <- as.factor(means$trial_type)
+means$times_of_response <- as.factor(means$times_of_response)
+
+setnames(means,'V1','mean_beta')
+setnames(trained_df, "run", "round")
+setnames(trained_df,"response.class", "trial_type")
+#setnames(trained_df,"trial_number", "trial_type")
+setnames(trained_df, "cur_fb", "feedback_cur")
+setnames(trained_df, "prev_fb", "feedback_prev")
+setnames(trained_df, "subj", "subject")
+setnames(trained_df, "event.0...time.", "times_of_response")
+trained_df$times_of_response <- as.factor(trained_df$times_of_response)
+
+new_dataset <- trained_df %>%inner_join(means, by=c("subject", "times_of_response", "round", "trial_type","feedback_prev"))
+
+
+lp<- filter(new_dataset, trial_type %in% "risk")
+postlp<- filter(new_dataset, trial_type %in% "postrisk")
+prelp<- filter(new_dataset, trial_type %in% "prerisk")
+hp <- filter(new_dataset, trial_type %in% "norisk")
+######Create lmem model (подставляем тип трайла, который интересен)
+lmem<- lmer(data=hp, mean_beta~response.time + (1|subject)) # модель только для RT и mean_beta
+lmem<- lmer(data=hp, mean_beta~response.time*feedback_prev + (1|subject))
+summary(lmem)
+#r.squaredGLMM(lme4::lmer(response.time ~ mean_beta + (1|subject),  prerisk))
+set_theme(
+  axis.title.size = 2.2,
+  title.size = 0,
+  axis.textsize = 1.4,
+  legend.size = 2,
+  axis.textsize.x = 3,
+  axis.textsize.y = 3, 
+  legend.title.size = .8, 
+  geom.label.size = 3
+)
+plot_model(lmem, type = "pred", terms = c("response.time"),  wrap.title = 0,
+           wrap.labels = 10) # строим график
+plot_model(lmem, type = "pred", terms = c("response.time","feedback_prev"),   wrap.title = 0,
+           wrap.labels = 10) ## строим график для фидбэков раздельно
+an <- NULL
+an <- anova(lmem)
+an <- data.table(an,keep.rownames = TRUE)
+#an[, eta2:=F_to_eta2(`F value`, NumDF, DenDF)$Eta2_partial]
+an[`Pr(>F)`<0.001, stars:='***']
+an[`Pr(>F)`<0.01 & `Pr(>F)`>0.001 , stars:='**']
+an[`Pr(>F)`<0.05 & `Pr(>F)`>0.01 , stars:='*']
+an[`Pr(>F)`>0.05 & `Pr(>F)`<0.1 , stars:='#']
+
+MuMIn::r.squaredGLMM(lme4::lmer(data=prelp,response.time ~ mean_beta + (1|subject))) #### если нужно вывести R square
+
+##### если нужно посчитать обычные корреляции
+
+
+### усредняем между испытумыми ###
+my_mean_rt <-trained_df %>% 
+  group_by(subject, trial_type, feedback_prev) %>% 
+  summarise(RT = mean(response.time))
+my_mean_beta <-means %>% 
+  group_by(subject, trial_type, feedback_prev) %>% 
+  summarise(RT = mean(mean_beta))
+
+new_df <- my_mean_rt  %>%inner_join(my_mean_beta, by=c("subject","trial_type","feedback_prev" ))
+
+lp<- filter(new_df, trial_type %in% "risk")
+postlp<- filter(new_df, trial_type %in% "postrisk")
+prelp<- filter(new_df, trial_type %in% "prerisk")
+hp <- filter(new_df, trial_type %in% "norisk")
+
+
+cor.test(prelp$mean_beta,prelp$response.time) ### просто распечатываем корреляции
+g <- ggscatter(hp, x = "mean_beta", y = "response.time", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Beta change,dB", ylab = "RT, ms") ### график корреляций 
+
+
+
