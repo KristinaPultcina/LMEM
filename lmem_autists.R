@@ -130,11 +130,11 @@ for (i in 1:length(sensors)) {
     #m_sc <- update(m,data=temp_resc)
     Tuk <- data.table(summary(emmeans(m, pairwise ~ group|trial_type|feedback_cur, adjust = 'tukey',lmer.df = "satterthwaite",lmerTest.limit=8000))$contrasts)
     #print(Tuk)
-    Tuk[,contrast:=gsub(' - ','_',contrast)]
+    Tuk[,contrast:=gsub(' - ','_',contrast)] 
     Tuk[,p.value:=format(p.value, digits = 3)]
     #Tuk[,contrast:=paste0(scheme,'-',contrast)]
-    Tuk[,contrast:=paste0(trial_type,'-',feedback_cur,'-',contrast)] ####### ЕСЛИ нужно ТРОЙНОЕ взаимодействие !!!!!!!!!
-    #Tuk[,contrast:=paste0(trial_type,'-',contrast)]
+    Tuk[,contrast:=paste0(trial_type,'-',feedback_cur,'-',contrast)] ####### If you need triple interaction !!!!!!!!!
+    #Tuk[,contrast:=paste0(trial_type,'-',contrast)]  ####### If you need double interaction (for example trial type and feedback) !!!!!!!!!
     columns <- c('contrast','p.value')
     Tuk <- Tuk[,..columns]
     
